@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount backend code for development
+      - ./backend:/app
+      # Mount data directories  
+      - ./data:/app/data
+      # Mount model files directory
+      - ./models_files:/app/models_files
+      # Keep node_modules in container
+      - backend-cache:/app/__pycache__
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=True
+      - DB_URL=postgresql://user:pass@postgres:5432/elara_db
+    depends_on:
+      - postgres
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      - backend
+
+  postgres:
+    image: postgres:15
+    restart: always
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=pass
+      - POSTGRES_DB=elara_db
+
+volumes:
+  postgres-data:
+  backend-cache:
