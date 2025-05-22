@@ -312,11 +312,20 @@ async def demo_response():
     
     Returns a sample response for testing.
     """
+    from schemas import MedicalSource
+    
+    demo_source = MedicalSource(
+        title="Demo Mode",
+        url=None,
+        type="demo",
+        confidence=1.0,
+        relevance_score=1.0
+    )
     
     return ChatResponse(
         response="Hello! I'm Elara AI, your medical assistant. This is a demo response. How can I help you with your health questions today?",
         confidence=1.0,
-        sources=["Demo Mode"],
+        sources=[demo_source],
         language_detected="en",
         processing_time=0.001,
         conversation_id="demo-conversation",

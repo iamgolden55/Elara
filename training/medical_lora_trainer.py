@@ -28,26 +28,29 @@ warnings.filterwarnings("ignore")
 class MedicalLoRAConfig:
     """Configuration for medical LoRA fine-tuning"""
     # Model settings
-    base_model: str = "microsoft/DialoGPT-medium"  # More compatible fallback
-    model_max_length: int = 512
+    base_model: str = "bagel-hermes-2-pro-7b"                  # Using the actual local model name
+    local_model_path: str = "/Users/new/elara_main/models_files/mistral"  # FULL absolute path to model
+    model_max_length: int = 512                                # Reduced context to save memory
     
     # LoRA settings
-    lora_r: int = 32          # Significantly increased for better capacity
-    lora_alpha: int = 64      # Significantly increased for stronger adaptation
-    lora_dropout: float = 0.05 # Further reduced for better learning
-    target_modules: List[str] = field(default_factory=lambda: ["c_attn", "c_proj", "q_proj", "v_proj", "k_proj"])
+    lora_r: int = 16          # Rank for Mistral (careful with memory)
+    lora_alpha: int = 32      # Alpha value (32 is typical for Mistral)
+    lora_dropout: float = 0.1 # Standard dropout
+    # These are the correct target modules for Mistral-7B
+    target_modules: List[str] = field(default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
     
     # Training settings
-    output_dir: str = "../models_files/medical_lora"
-    num_epochs: int = 5       # More epochs for better learning
-    batch_size: int = 2       # Keep small for CPU
-    learning_rate: float = 1e-4 # Stable learning rate
-    gradient_accumulation_steps: int = 4
-    warmup_steps: int = 200   # More warmup steps
-    weight_decay: float = 0.01 # Added weight decay for regularization
+    output_dir: str = "../models_files/mistral/lora_adapter"  # Updated path for Mistral!
+    num_epochs: int = 3       # Reduced for CPU training (Mistral is big!)
+    batch_size: int = 1       # Reduced for CPU memory constraints
+    learning_rate: float = 2e-4 # Slightly higher learning rate
+    gradient_accumulation_steps: int = 8  # Increased for stability
+    warmup_steps: int = 100   # Reduced warmup steps
+    weight_decay: float = 0.01 # Standard weight decay
     logging_steps: int = 10
-    save_steps: int = 500
+    save_steps: int = 200
     lr_scheduler_type: str = "cosine" # Better learning rate scheduler
+    fp16: bool = True         # Use mixed precision for efficiency
     
     # Data settings
     train_size: float = 0.8
@@ -70,7 +73,58 @@ class MedicalDataProcessor:
         """Load tokenizer and add special tokens"""
         print(f"🔧 Loading tokenizer: {model_name}")
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            # Our super-duper tokenizer loading method with extra awesome sauce! 🧙‍♂️✨
+            print("💾 Attempting to load model-specific tokenizer...")
+            
+            # First try loading with fast tokenizer
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_name,
+                    use_fast=True,  # Force using fast Rust-based tokenizers
+                    trust_remote_code=True
+                )
+                print("✅ Successfully loaded fast tokenizer!")
+            except Exception as fast_error:
+                print(f"⚠️ Fast tokenizer error: {fast_error}")
+                print("🔄 Trying direct tokenizer.json loading...")
+                
+                # Try our awesome direct loading method with the tokenizers library
+                try:
+                    # Import the tokenizers library
+                    from tokenizers import Tokenizer
+                    from transformers import PreTrainedTokenizerFast
+                    
+                    # Look for tokenizer.json in multiple places (we're thorough!)
+                    possible_paths = []
+                    
+                    # 1. Direct local path if model_name is a directory
+                    if os.path.exists(model_name):
+                        possible_paths.append(os.path.join(model_name, "tokenizer.json"))
+                    
+                    # 2. Current directory
+                    possible_paths.append("tokenizer.json")
+                    
+                    # 3. The Mistral model path specifically
+                    mistral_path = "/Users/new/elara_main/models_files/mistral"
+                    possible_paths.append(os.path.join(mistral_path, "tokenizer.json"))
+                    
+                    # Try each path until we find one that works
+                    for path in possible_paths:
+                        if os.path.exists(path):
+                            print(f"🔍 Found tokenizer.json at {path}!")
+                            # Create fast tokenizer from the tokenizer.json file
+                            base_tokenizer = Tokenizer.from_file(path)
+                            tokenizer = PreTrainedTokenizerFast(tokenizer_object=base_tokenizer)
+                            # Set the model_max_length from our config
+                            tokenizer.model_max_length = self.config.model_max_length
+                            print("✅ Successfully created fast tokenizer from tokenizer.json")
+                            return tokenizer
+                    
+                    # If we got here, we didn't find tokenizer.json anywhere
+                    raise ValueError(f"Could not find tokenizer.json in any of: {possible_paths}")
+                except Exception as manual_error:
+                    print(f"❌ Manual tokenizer creation failed: {manual_error}")
+                    raise ValueError("All tokenizer loading methods failed!")
             
             # Add special tokens for medical conversations
             special_tokens = {
@@ -91,8 +145,7 @@ class MedicalDataProcessor:
                 tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
             
             tokenizer.model_max_length = self.config.model_max_length
-            self.tokenizer = tokenizer
-            return self.tokenizer
+            return tokenizer
         except Exception as e:
             print(f"❌ Error loading tokenizer: {e}")
             raise
@@ -508,41 +561,70 @@ class MedicalLoRATrainer:
         """Load and setup the base model with LoRA"""
         print(f"🤖 Loading base model: {self.config.base_model}")
         
-        # Load tokenizer first to ensure it's available throughout the process
+        # ONLY use the local model - no more online searches!
+        local_path = os.path.abspath(self.config.local_model_path)
+        print(f"📂 Using local model ONLY from: {local_path}")
+        
+        # Skip any model_name/path confusion and always use the direct path
+        model_path = local_path
+        
+        # Force the script to ONLY use local files
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        print("🔒 Set to OFFLINE MODE - will only use local files")
+        
+        # Use our special tokenizer loading magic!
         try:
-            print(f"🔧 Loading tokenizer: {self.config.base_model}")
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
+            print(f"🔧 Loading tokenizer with special magic...")
             
-            # Add special tokens for medical conversations
-            special_tokens = {
-                "pad_token": "<PAD>",
-                "eos_token": "<EOS>",
-                "bos_token": "<BOS>",
-                "unk_token": "<UNK>"
-            }
+            # Create a temporary data processor just to use its tokenizer loading method
+            # This is a clever trick to reuse our SentencePiece-free loading code!
+            data_processor = MedicalDataProcessor(self.config)
+            self.tokenizer = data_processor.load_tokenizer(model_path)
             
-            # Add tokens that don't exist
-            new_tokens = []
-            for key, token in special_tokens.items():
-                if getattr(self.tokenizer, key) is None:
-                    new_tokens.append(token)
-                    setattr(self.tokenizer, key, token)
+            print(f"✅ Successfully loaded tokenizer using our special method!")
+            print(f"🔤 Tokenizer has vocabulary size: {len(self.tokenizer)}")
             
-            if new_tokens:
-                self.tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
+            # Double-check pad token is set correctly
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                print("🔧 Set padding token to EOS token")
+            
+            # Set padding side for batch creation
+            self.tokenizer.padding_side = "right"
+            print("🔧 Set padding side to right")
             
             self.tokenizer.model_max_length = self.config.model_max_length
-            print("✅ Tokenizer loaded successfully")
+            print(f"✅ Tokenizer loaded successfully with vocab size: {len(self.tokenizer)}")
         except Exception as e:
             print(f"❌ Failed to load tokenizer: {e}")
             raise
         
-        # Load model - always use float32 for CPU training to avoid precision issues
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.base_model,
-            torch_dtype=torch.float32,  # Always use float32 for stability
-            device_map=None,  # Let the trainer handle device placement
-        )
+        try:
+            print("🔧 Setting up 4-bit quantization for CPU training...")
+            # For Mistral on CPU, use 4-bit quantization to save memory
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,   # Use float16 even on CPU for compatibility with quantization
+                device_map="auto",        # Will use CPU if no GPU available
+                load_in_4bit=True,         # 4-bit quantization
+                trust_remote_code=True,     # Important for local model loading
+                quantization_config=BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True
+                ),
+                low_cpu_mem_usage=True      # Important for CPU training
+            )
+        except Exception as e:
+            print(f"⚠️ Quantization error: {e}")
+            print("🔄 Falling back to standard model loading...")
+            # Fallback to standard loading if quantization isn't available
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=torch.float32,  # Use float32 for CPU stability
+                device_map=None             # Let the trainer handle device placement
+            )
         
         # Resize model embeddings if we added tokens
         if len(self.tokenizer) > self.model.config.vocab_size:
@@ -614,13 +696,13 @@ class MedicalLoRATrainer:
             save_steps=self.config.save_steps,
             save_strategy="steps",
             save_total_limit=2,
-            weight_decay=0.01,
+            weight_decay=self.config.weight_decay,
             report_to="wandb" if self.use_wandb else "none",
-            run_name=f"medical-{self.config.user_type}",
-            # Only use fp16 when GPU is available and explicitly disable otherwise
-            fp16=False,  # Disable mixed precision training 
-            bf16=False,  # Disable BF16 training
-            optim="adamw_torch",  # Use standard PyTorch optimizer which works on CPU and GPU
+            run_name=f"mistral-medical-{self.config.user_type}",
+            # Mixed precision training settings
+            fp16=self.config.fp16 and use_gpu,  # Only use fp16 on GPU
+            bf16=False,                       # Disable BF16 training (not supported everywhere)
+            optim="paged_adamw_8bit" if use_gpu else "adamw_torch",  # 8-bit optimizer when possible
             remove_unused_columns=False,
             dataloader_drop_last=True,  # Prevent issues with last incomplete batch
             dataloader_num_workers=0,   # Simpler data loading for debugging

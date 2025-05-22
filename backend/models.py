@@ -1,615 +1,472 @@
 #!/usr/bin/env python3
 """
-🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠
-                            ELARA AI - MODEL MANAGER (CONTINUED)
-                        The AI Chef Squad Manager! 👨‍🍳
-🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠
+🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠
+                            ELARA AI - MODEL MANAGER
+                        The Brain of Your AI Assistant! 🧠
+🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠🤖🧠
 """
 
+import torch
+from typing import Dict, List, Optional, Any
 import asyncio
-import json
-import random
-import time
-from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
-import psutil
+import time
+import traceback
 from datetime import datetime
 
+# Import necessary libraries with error handling
 try:
-    import torch
-    from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
-    from peft import PeftModel, PeftConfig  # Add imports for LoRA adapters
-    TORCH_AVAILABLE = True
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from peft import PeftModel, PeftConfig
+    TRANSFORMERS_AVAILABLE = True
 except ImportError:
-    TORCH_AVAILABLE = False
-    print("⚠️  PyTorch/Transformers not available. Running in simulation mode.")
-
-# Import the RAG system
-import rag_utils
-from rag_utils import medical_rag
-
-import config
-from config import Settings
+    print("⚠️ Transformers or PEFT not available - some features will be disabled")
+    TRANSFORMERS_AVAILABLE = False
 
 class ModelManager:
     """
-    🧠 THE AI BRAIN MANAGER
+    🧠 ELARA AI MODEL MANAGER
     
-    Manages all AI models: medical reasoning, translation, speech, etc.
-    Think of this as the head chef coordinating all the kitchen staff!
+    This class manages all AI models for Elara AI:
+    - Loading your trained medical LoRA model
+    - Text generation for medical Q&A
+    - Model status monitoring
+    - Memory management
     """
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings):
         self.settings = settings
         self.models = {}
+        self.tokenizers = {}
         self.model_status = {}
-        self.memory_usage = {}
-        self.startup_time = time.time()
+        self.last_loaded = {}
         
-        # Medical knowledge base (simplified for demo)
-        self.medical_knowledge = self._load_medical_knowledge()
+        print("🧠 ModelManager initialized!")
         
-        print("🤖 Model Manager initialized!")
-    
     async def initialize_models(self):
-        """🚀 Load all AI models on startup"""
+        """🚀 Initialize and load all enabled models"""
+        print("🚀 Starting model initialization...")
         
-        print("🔄 Initializing AI models...")
-        
-        if not TORCH_AVAILABLE:
-            print("💡 Running in simulation mode (no actual AI models)")
-            await self._initialize_simulation_mode()
-            return
-        
-        # Initialize the RAG system
-        print("🔍 Initializing RAG system...")
-        await medical_rag.initialize()
-        
-        # Try to load lightweight models first
+        if not TRANSFORMERS_AVAILABLE:
+            print("❌ Cannot load models - transformers library not available")
+            return False
+            
         try:
-            await self._load_lightweight_models()
-            print("✅ Lightweight models loaded successfully!")
-        except Exception as e:
-            print(f"⚠️  Could not load AI models: {e}")
-            print("💡 Falling back to simulation mode")
-            await self._initialize_simulation_mode()
-    
-    async def _initialize_simulation_mode(self):
-        """🎭 Initialize simulation mode for demo/development"""
-        
-        self.models = {
-            "medical_qa": "simulation",
-            "translator": "simulation", 
-            "language_detector": "simulation",
-            "symptom_analyzer": "simulation"
-        }
-        
-        self.model_status = {
-            "medical_qa": "loaded",
-            "translator": "loaded",
-            "language_detector": "loaded", 
-            "symptom_analyzer": "loaded"
-        }
-        
-        print("🎭 Simulation mode: Ready to demo!")
-    
-    async def _load_lightweight_models(self):
-        """🪶 Load medical LoRA adapter and other models"""
-        
-        # Path to your LoRA adapter
-        lora_path = self.settings.models_dir / "medical_lora"
-        print(f"📁 Checking for LoRA adapter at: {lora_path}")
-        
-        try:
-            # Check if medical LoRA adapter exists
-            if lora_path.exists():
-                print("💫 Found medical LoRA adapter! Loading...")
+            # Load the medical LoRA model (your trained model!)
+            success = await self._load_medical_model()
+            
+            if success:
+                print("✅ Medical models initialized successfully!")
+                return True
+            else:
+                print("⚠️ Some models failed to load, but continuing...")
+                return False
                 
-                # Load the PEFT configuration to get the base model name
-                peft_config = PeftConfig.from_pretrained(str(lora_path))
-                print(f"🔄 Base model: {peft_config.base_model_name_or_path}")
+        except Exception as e:
+            print(f"❌ Error during model initialization: {e}")
+            traceback.print_exc()
+            return False
+    
+    async def _load_medical_model(self):
+        """🏥 Load the Mistral-7B model with LoRA adapter (your powerful model!)"""
+        print("🏥 Loading Mistral-7B model...")
+        
+        try:
+            # SWITCHED TO MISTRAL! Use the Mistral model path instead of DialoGPT
+            mistral_path = self.settings.MISTRAL_MODEL_PATH
+            mistral_lora_path = Path(mistral_path) / "lora_adapter"
+            
+            print(f"📁 Mistral model path: {mistral_path}")
+            
+            # Check if the Mistral model exists
+            if not Path(mistral_path).exists():
+                print(f"❌ Mistral model not found at: {mistral_path}")
+                print("Falling back to DialoGPT model...")
+                return await self._load_fallback_model()
+            
+            # Use CPU-friendly loading instead of 4-bit quantization
+            print("🔧 Setting up CPU-friendly model loading...")
+            # No quantization for CPU compatibility
+            use_quantization = False
+            
+            try:
+                # Try to import bitsandbytes to see if it works on this CPU
+                import bitsandbytes as bnb
+                if bnb.__version__ and torch.cuda.is_available():
+                    print("✅ GPU detected! Setting up 4-bit quantization...")
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_use_double_quant=True
+                    )
+                    use_quantization = True
+                else:
+                    print("⚠️ No GPU detected. Using CPU-friendly mode.")
+            except ImportError:
+                print("⚠️ BitsAndBytes not properly installed. Using CPU-friendly mode.")
+            except Exception as e:
+                print(f"⚠️ Quantization error: {e}. Using CPU-friendly mode.")
+            
+            # Load Mistral tokenizer using fast tokenizers (no sentencepiece needed!)
+            print("🔤 Loading Mistral tokenizer using fast tokenizers...")
+            
+            # Use the local tokenizer files but with use_fast=True to avoid sentencepiece
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    mistral_path,
+                    use_fast=True,  # Force using fast Rust-based tokenizers
+                    local_files_only=True,  # Don't try to download
+                    trust_remote_code=True
+                )
+            except Exception as e:
+                print(f"⚠️ Error with fast tokenizer: {e}")
+                print("🔄 Trying to create a compatible tokenizer manually...")
+                
+                # Fallback: Create a compatible tokenizer
+                from tokenizers import Tokenizer
+                from transformers import PreTrainedTokenizerFast
                 
                 try:
-                    # First, try to load the tokenizer from the LoRA adapter directory
-                    print("🔧 Loading tokenizer from LoRA adapter...")
-                    try:
-                        tokenizer = AutoTokenizer.from_pretrained(str(lora_path))
-                        print("✅ Using saved tokenizer from LoRA adapter")
-                    except Exception as e:
-                        print(f"⚠️ Could not load saved tokenizer, using base model tokenizer: {e}")
-                        tokenizer = AutoTokenizer.from_pretrained(peft_config.base_model_name_or_path)
-                    
-                    # Load base model
-                    print("📥 Loading DialoGPT base model...")
-                    base_model = AutoModelForCausalLM.from_pretrained(
-                        peft_config.base_model_name_or_path,
-                        torch_dtype=torch.float32,  # Use float32 for CPU compatibility
-                        low_cpu_mem_usage=True      # Memory optimization
-                    )
-                    
-                    # Resize model embeddings to match tokenizer if needed
-                    if len(tokenizer) != base_model.config.vocab_size:
-                        print(f"🔧 Resizing model embeddings from {base_model.config.vocab_size} to {len(tokenizer)}")
-                        base_model.resize_token_embeddings(len(tokenizer))
-                    
-                    # Load LoRA adapter
-                    print("🧠 Applying medical LoRA adapter...")
-                    model = PeftModel.from_pretrained(
-                        base_model,
-                        str(lora_path),
-                        torch_dtype=torch.float32,  # Use float32 for CPU compatibility
-                        is_trainable=False          # Inference mode only
-                    )
-                    
-                    # Add special tokens if not in tokenizer
-                    special_tokens = ["<USER>", "<ASSISTANT>", "<SYSTEM>"]
-                    special_tokens_dict = {}
-                    
-                    new_tokens = []
-                    for token in special_tokens:
-                        if token not in tokenizer.get_vocab():
-                            new_tokens.append(token)
-                    
-                    if new_tokens:
-                        print(f"➕ Adding special tokens: {new_tokens}")
-                        special_tokens_dict["additional_special_tokens"] = new_tokens
-                        tokenizer.add_special_tokens(special_tokens_dict)
-                    
-                    # Store model and tokenizer directly (don't use pipeline due to PeftModel issues)
-                    print("🚀 Setting up medical QA model...")
-                    self.models["medical_qa"] = {
-                        "model": model,
-                        "tokenizer": tokenizer,
-                        "type": "lora"
-                    }
-                    self.model_status["medical_qa"] = "loaded"
-                    print("✅ Medical LoRA model loaded successfully!")
-                    
-                    # Track memory usage
-                    self.memory_usage["medical_qa"] = torch.cuda.memory_allocated() / 1024 / 1024 if torch.cuda.is_available() else 0
-                    
-                except Exception as e:
-                    print(f"❌ Error loading medical LoRA adapter: {e}")
-                    print("⚠️ Falling back to gpt2 model...")
-                    # Fall back to gpt2 if there's an issue with the LoRA model
-                    self._load_fallback_model()
+                    # Try to load tokenizer.json which should be in the model folder
+                    tokenizer_json_path = Path(mistral_path) / "tokenizer.json"
+                    if tokenizer_json_path.exists():
+                        # Create fast tokenizer from the tokenizer.json file
+                        base_tokenizer = Tokenizer.from_file(str(tokenizer_json_path))
+                        tokenizer = PreTrainedTokenizerFast(tokenizer_object=base_tokenizer)
+                        print("✅ Successfully created fast tokenizer from tokenizer.json")
+                    else:
+                        print("❌ tokenizer.json not found - falling back to DialoGPT")
+                        return await self._load_fallback_model()
+                except Exception as fallback_error:
+                    print(f"❌ Fallback tokenizer error: {fallback_error}")
+                    print("🚨 Falling back to DialoGPT model")
+                    return await self._load_fallback_model()
+            
+            # Ensure tokenizer has pad token
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.padding_side = "right"
+            
+            print(f"🔤 Mistral tokenizer loaded with vocab size: {len(tokenizer)}")
+            
+            # Load Mistral model with or without quantization based on capability
+            print("🤖 Loading Mistral base model...")
+            
+            # Different loading approaches depending on hardware
+            if use_quantization:
+                print("🔥 Using 4-bit quantization for faster inference!")
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    mistral_path,
+                    device_map="auto",
+                    torch_dtype=torch.float16,
+                    quantization_config=quantization_config,
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True
+                )
             else:
-                print("⚠️ No medical LoRA adapter found at: " + str(lora_path))
-                print("⚠️ Falling back to gpt2 model...")
-                # Fall back to gpt2 if LoRA adapter isn't found
-                self._load_fallback_model()
-                
+                print("🐪 Using CPU-friendly mode (slower but more compatible)")
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    mistral_path,
+                    device_map=None,  # Use default CPU placement
+                    torch_dtype=torch.float32,  # Use float32 for CPU
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True
+                )
+            
+            # CRITICAL: Resize model embeddings to match tokenizer vocab size
+            print(f"📏 Original model vocab size: {base_model.config.vocab_size}")
+            print(f"📏 Tokenizer vocab size: {len(tokenizer)}")
+            
+            if base_model.config.vocab_size != len(tokenizer):
+                print("🔧 Resizing model embeddings to match tokenizer...")
+                base_model.resize_token_embeddings(len(tokenizer))
+                print(f"✅ Model embeddings resized to: {base_model.config.vocab_size}")
+            
+            # Check if we have a LoRA adapter for Mistral
+            has_lora = mistral_lora_path.exists()
+            
+            # Apply LoRA adapter if available, otherwise use base model
+            if has_lora:
+                print(f"🧠 Found LoRA adapter at {mistral_lora_path}, applying it...")
+                model = PeftModel.from_pretrained(
+                    base_model,
+                    str(mistral_lora_path),
+                    torch_dtype=torch.float16,
+                    is_trainable=False  # Inference mode
+                )
+            else:
+                print("🚨 No LoRA adapter found for Mistral, using base model")
+                model = base_model
+            
+            # Store the model and tokenizer
+            self.models["medical_qa"] = model
+            self.tokenizers["medical_qa"] = tokenizer
+            self.model_status["medical_qa"] = "loaded"
+            self.last_loaded["medical_qa"] = datetime.now()
+            
+            print("✅ Medical LoRA model loaded successfully!")
+            
+            # Test the model quickly
+            await self._test_medical_model()
+            
+            return True
+            
         except Exception as e:
-            print(f"⚠️ Could not load models: {e}")
-            raise
+            print(f"❌ Failed to load medical model: {e}")
+            traceback.print_exc()
+            self.model_status["medical_qa"] = "failed"
+            return False
     
-    def _load_fallback_model(self):
-        """🔄 Load a fallback model if LoRA isn't available"""
+    async def _load_fallback_model(self):
+        """🚨 Load fallback DialoGPT model if Mistral is not available"""
+        print("🚨 Loading fallback DialoGPT model...")
+        
         try:
-            print("📥 Loading fallback text generator (gpt2)...")
-            generator = pipeline(
-                "text-generation",
-                model="gpt2",  # Small, fast model for testing
-                tokenizer="gpt2",
-                device=0 if torch.cuda.is_available() else -1  # GPU if available
+            # Get model configuration for the original DialoGPT model
+            model_config = self.settings.get_model_config("medical_qa")
+            lora_path = model_config["path"]
+            
+            print(f"📁 Fallback LoRA path: {lora_path}")
+            
+            if not lora_path.exists():
+                print(f"❌ Fallback LoRA adapter not found at: {lora_path}")
+                return False
+            
+            # Load PEFT configuration
+            print("📄 Loading fallback PEFT configuration...")
+            peft_config = PeftConfig.from_pretrained(str(lora_path))
+            base_model_name = peft_config.base_model_name_or_path
+            
+            print(f"🤖 Fallback base model: {base_model_name}")
+            
+            # Load tokenizer from LoRA path
+            print("🔤 Loading fallback tokenizer...")
+            tokenizer = AutoTokenizer.from_pretrained(str(lora_path))
+            
+            # Ensure tokenizer has pad token
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            
+            print(f"🔤 Fallback tokenizer loaded with vocab size: {len(tokenizer)}")
+            
+            # Load base model
+            print("🤖 Loading fallback base model...")
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_name,
+                torch_dtype=torch.float32,  # Use float32 for CPU compatibility
+                low_cpu_mem_usage=True
             )
             
-            self.models["medical_qa"] = generator
-            self.model_status["medical_qa"] = "loaded (fallback)"
-            print("✅ Fallback model loaded!")
+            # Resize model embeddings if needed
+            if base_model.config.vocab_size != len(tokenizer):
+                print("🔧 Resizing fallback model embeddings...")
+                base_model.resize_token_embeddings(len(tokenizer))
+            
+            # Load LoRA adapter
+            print("🧠 Loading fallback LoRA adapter...")
+            model = PeftModel.from_pretrained(
+                base_model,
+                str(lora_path),
+                torch_dtype=torch.float32,
+                is_trainable=False  # Inference mode
+            )
+            
+            # Store the model and tokenizer
+            self.models["medical_qa"] = model
+            self.tokenizers["medical_qa"] = tokenizer
+            self.model_status["medical_qa"] = "loaded_fallback"
+            self.last_loaded["medical_qa"] = datetime.now()
+            
+            print("⚠️ Fallback model loaded successfully - using DialoGPT instead of Mistral")
+            return True
+            
         except Exception as e:
-            print(f"❌ Error loading fallback model: {e}")
-            raise
+            print(f"❌ Failed to load fallback model: {e}")
+            traceback.print_exc()
+            self.model_status["medical_qa"] = "failed"
+            return False
     
-    def _load_medical_knowledge(self) -> Dict[str, Any]:
-        """📚 Load medical knowledge base for RAG"""
+    async def _test_medical_model(self):
+        """🧪 Quick test of the medical model"""
+        print("🧪 Testing medical model...")
         
-        # In a real system, this would load from your vector database
-        # For now, let's use some sample medical facts
-        
-        return {
-            "diabetes": {
-                "definition": "A group of metabolic disorders characterized by high blood sugar levels",
-                "symptoms": ["increased urination", "increased thirst", "increased hunger", "weight loss"],
-                "types": ["Type 1", "Type 2", "Gestational"],
-                "treatments": ["insulin therapy", "medications", "diet modification", "exercise"]
-            },
-            "hypertension": {
-                "definition": "A condition where blood pressure in arteries is persistently elevated",
-                "symptoms": ["headache", "dizziness", "blurred vision", "often asymptomatic"],
-                "risk_factors": ["obesity", "stress", "high sodium intake", "age"],
-                "treatments": ["medications", "lifestyle changes", "diet modification", "exercise"]
-            },
-            "covid-19": {
-                "definition": "Infectious disease caused by SARS-CoV-2 virus",
-                "symptoms": ["fever", "dry cough", "fatigue", "loss of taste/smell"],
-                "prevention": ["vaccination", "masks", "social distancing", "hand hygiene"],
-                "treatments": ["supportive care", "antivirals", "monoclonal antibodies"]
-            }
-        }
-    
-    # Main AI functions
-    async def detect_language(self, text: str) -> str:
-        """🌍 Detect the language of input text"""
-        
-        # Simple language detection (in production, use proper NLP)
-        if self.models.get("language_detector") == "simulation":
-            # Simple heuristic: detect some common patterns
-            if any(word in text.lower() for word in ["el", "la", "es", "que", "como"]):
-                return "es"  # Spanish
-            elif any(word in text.lower() for word in ["le", "la", "est", "que", "comment"]):
-                return "fr"  # French
-            else:
-                return "en"  # Default to English
-        
-        # Real implementation would use a language detection model
-        return "en"
-    
-    async def translate_to_english(self, text: str, source_language: str) -> str:
-        """🌍➡️🇺🇸 Translate text to English"""
-        
-        if source_language == "en":
-            return text
-        
-        if self.models.get("translator") == "simulation":
-            # Simulation: just add a prefix to show translation happened
-            return f"[Translated from {source_language}] {text}"
-        
-        # Real implementation would use BLOOM or another translation model
-        return text
-    
-    async def translate_from_english(self, text: str, target_language: str) -> str:
-        """🇺🇸➡️🌍 Translate text from English to target language"""
-        
-        if target_language == "en":
-            return text
-        
-        if self.models.get("translator") == "simulation":
-            # Simulation: add prefix to show translation
-            return f"[Translated to {target_language}] {text}"
-        
-        # Real implementation would use BLOOM or another translation model
-        return text
-    
-    async def translate_text(self, text: str, source_language: str, target_language: str) -> str:
-        """🌍🔄🌍 Direct translation between any two languages"""
-        
-        # For now, route through English
-        if source_language != "en":
-            english_text = await self.translate_to_english(text, source_language)
-        else:
-            english_text = text
-        
-        if target_language != "en":
-            return await self.translate_from_english(english_text, target_language)
-        else:
-            return english_text
-    
-    async def retrieve_medical_context(self, question: str, max_sources: int = 5) -> List[Dict[str, Any]]:
-        """📚 Retrieve relevant medical context (RAG - Retrieval Augmented Generation)"""
-        
-        # If RAG system is available, use it
-        if medical_rag.is_available():
-            print("🔍 Using RAG system to retrieve relevant medical information...")
-            results = await medical_rag.search(question, k=max_sources)
+        try:
+            model = self.models["medical_qa"]
+            tokenizer = self.tokenizers["medical_qa"]
             
-            # Convert RAG results to our format
-            context = []
-            for result in results:
-                metadata = result.get("metadata", {})
-                
-                context_item = {
-                    "title": f"Medical Information: {metadata.get('title', 'Unknown')}",
-                    "content": result.get("content", ""),
-                    "relevance_score": result.get("score", 0.0),
-                    "source_type": metadata.get("source", "medical_database"),
-                    "condition": metadata.get("title", "").lower()  # Use title as condition
-                }
-                context.append(context_item)
+            test_prompt = "<|system|>\nYou are Elara, a professional medical AI assistant.\n<|user|>\nWhat is diabetes?\n<|assistant|>\n"
             
-            return context
-        
-        # Simple keyword matching fallback (in production, use vector similarity search)
-        question_lower = question.lower()
-        relevant_context = []
-        
-        for condition, info in self.medical_knowledge.items():
-            # Check if condition is mentioned in question
-            if condition in question_lower or any(symptom in question_lower for symptom in info.get("symptoms", [])):
-                context_item = {
-                    "title": f"Medical Information: {condition.title()}",
-                    "content": json.dumps(info, indent=2),
-                    "relevance_score": 0.9,  # Simplified scoring
-                    "source_type": "medical_database",
-                    "condition": condition
-                }
-                relevant_context.append(context_item)
-        
-        # Limit to max_sources
-        return relevant_context[:max_sources]
+            inputs = tokenizer(test_prompt, return_tensors="pt")
+            
+            with torch.no_grad():
+                outputs = model.generate(
+                    input_ids=inputs.input_ids,
+                    attention_mask=inputs.attention_mask,
+                    max_new_tokens=50,
+                    temperature=0.7,
+                    do_sample=True
+                )
+            
+            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            generated_part = response[len(test_prompt):].strip()
+            
+            print(f"🧪 Test response preview: {generated_part[:100]}...")
+            print("✅ Medical model test successful!")
+            
+        except Exception as e:
+            print(f"⚠️ Model test failed: {e}")
     
     async def generate_medical_response(
         self, 
         question: str, 
-        context: List[Dict[str, Any]], 
-        user_type: str,
-        include_sources: bool = True
+        context: Optional[str] = None,
+        user_type: str = "patient",
+        include_sources: bool = False
     ) -> Dict[str, Any]:
-        """🧠 Generate AI response to medical question"""
+        """🏥 Generate medical response using your trained LoRA model"""
         
-        # Extract relevant information from context
-        context_text = ""
-        sources = []
-        
-        for ctx in context:
-            context_text += f"\n{ctx['content']}"
-            if include_sources:
-                sources.append({
-                    "title": ctx['title'],
-                    "type": ctx['source_type'],
-                    "confidence": 0.95,
-                    "relevance_score": ctx['relevance_score']
-                })
-        
-        # Generate response based on model type
-        if self.models.get("medical_qa") == "simulation":
-            response = await self._generate_simulation_response(question, context, user_type)
-        else:
-            response = await self._generate_ai_response(question, context, user_type)
-        
-        # Determine if professional consultation is needed
-        needs_consultation = self._needs_professional_consultation(question, user_type)
-        
-        return {
-            "response": response,
-            "confidence": 0.85,  # Simplified confidence score
-            "sources": sources,
-            "needs_professional_consultation": needs_consultation,
-            "context_used": len(context) > 0
-        }
-    
-    async def _generate_simulation_response(
-        self, 
-        question: str, 
-        context: List[Dict[str, Any]], 
-        user_type: str
-    ) -> str:
-        """🎭 Generate simulated response for demo purposes"""
-        
-        # Extract condition from context if available
-        condition = None
-        if context:
-            for ctx in context:
-                if "condition" in ctx:
-                    condition = ctx["condition"]
-                    break
-        
-        # Generate response based on detected condition
-        if condition and condition in self.medical_knowledge:
-            info = self.medical_knowledge[condition]
-            
-            if user_type == "patient":
-                # Patient-friendly response
-                response = f"I'd be happy to help you understand {condition.replace('_', ' ').title()}. "
-                response += f"This is {info['definition']}. "
-                
-                if "symptoms" in info:
-                    response += f"Common symptoms include: {', '.join(info['symptoms'][:3])}. "
-                
-                response += "However, this information is for educational purposes only. "
-                response += "For personalized medical advice and proper diagnosis, please consult with a healthcare professional."
-                
-            elif user_type == "doctor":
-                # More technical response for doctors
-                response = f"Regarding {condition.replace('_', ' ')}: {info['definition']}. "
-                
-                if "treatments" in info:
-                    response += f"Treatment options typically include: {', '.join(info['treatments'])}. "
-                
-                response += "Please consider the individual patient's medical history and current condition when making treatment decisions."
-                
-            else:
-                # General public response
-                response = f"{condition.replace('_', ' ').title()} is {info['definition']}. "
-                response += "This information is provided for educational purposes. "
-                response += "For specific medical concerns, please consult a healthcare provider."
-        
-        else:
-            # Generic response when no specific condition is detected
-            if user_type == "patient":
-                response = "Thank you for your question. While I can provide general medical information, "
-                response += "I cannot replace professional medical advice. For specific health concerns, "
-                response += "please consult with your healthcare provider who can properly assess your situation."
-            else:
-                response = "I can provide general medical information to help answer your question. "
-                response += "However, for specific clinical guidance, please refer to current medical guidelines "
-                response += "and consider individual patient factors."
-        
-        return response
-    
-    async def _generate_ai_response(
-        self, 
-        question: str, 
-        context: List[Dict[str, Any]], 
-        user_type: str
-    ) -> str:
-        """🤖 Generate AI response using medical LoRA model"""
-        
-        # Construct prompt with RAG context
-        prompt = f"Human: {question}\n"
-        
-        # Add context if available
-        context_text = ""
-        
-        # Check if RAG is available for enhanced context
-        if medical_rag.is_available():
-            rag_context = await medical_rag.get_context_for_query(question)
-            if rag_context:
-                context_text += rag_context
-        
-        # Add any other context (traditional method)
-        if context:
-            for ctx in context:
-                if "condition" in ctx:
-                    condition = ctx["condition"]
-                    if condition in self.medical_knowledge:
-                        info = self.medical_knowledge[condition]
-                        # Add relevant info from medical knowledge
-                        context_text += f"\nRelevant information about {condition}:\n"
-                        context_text += f"- Definition: {info.get('definition', '')}\n"
-                        if 'symptoms' in info:
-                            context_text += f"- Symptoms: {', '.join(info.get('symptoms', []))}\n"
-                        if 'treatments' in info:
-                            context_text += f"- Treatments: {', '.join(info.get('treatments', []))}\n"
-        
-        # Only add context text if we have any
-        if context_text:
-            prompt += f"{context_text.strip()}\n"
-        
-        # Add the Assistant prefix for completion
-        prompt += "Assistant:"
+        if "medical_qa" not in self.models:
+            return {
+                "response": "I'm sorry, my medical knowledge model is not available right now. Please try again later.",
+                "confidence": 0.0,
+                "sources": [],
+                "needs_professional_consultation": True
+            }
         
         try:
-            # Check if we're using a pipeline or a custom model object
-            if isinstance(self.models["medical_qa"], dict) and "model" in self.models["medical_qa"] and "tokenizer" in self.models["medical_qa"]:
-                # We're using our custom model object with the LoRA adapter
-                print("🧠 Generating response with medical LoRA model...")
-                
-                model = self.models["medical_qa"]["model"]
-                tokenizer = self.models["medical_qa"]["tokenizer"]
-                
-                # Tokenize the input
-                inputs = tokenizer(prompt, return_tensors="pt")
-                
-                # Generate text
-                with torch.no_grad():
-                    output_sequences = model.generate(
-                        input_ids=inputs.input_ids,
-                        attention_mask=inputs.attention_mask,
-                        max_new_tokens=300,  # Longer responses for detailed medical info
-                        do_sample=True,
-                        temperature=0.7,       # More balanced temperature
-                        top_p=0.95,            # Wider sampling
-                        repetition_penalty=1.1, # Milder repetition penalty
-                        no_repeat_ngram_size=2  # Smaller n-gram size for medical domain
-                    )
-                
-                # Decode the output
-                generated_text = tokenizer.decode(output_sequences[0], skip_special_tokens=False)
-                
+            model = self.models["medical_qa"]
+            tokenizer = self.tokenizers["medical_qa"]
+            
+            # Create prompt in the format your model was trained on
+            system_msg = "You are Elara, a professional medical AI assistant trained to provide accurate, evidence-based medical information. Always provide helpful, safe, and compassionate responses."
+            
+            if user_type == "doctor":
+                system_msg += " You are speaking with a healthcare professional, so you can use medical terminology."
             else:
-                # We're using the transformer pipeline
-                print("🧠 Generating response with fallback model...")
-                
-                generator = self.models["medical_qa"]
-                outputs = generator(
-                    prompt,
-                    max_new_tokens=250,
-                    num_return_sequences=1,
+                system_msg += " You are speaking with a patient, so use clear, simple language."
+            
+            # Format the prompt
+            if context:
+                prompt = f"<|system|>\n{system_msg}\n\nRelevant context: {context}\n<|user|>\n{question}\n<|assistant|>\n"
+            else:
+                prompt = f"<|system|>\n{system_msg}\n<|user|>\n{question}\n<|assistant|>\n"
+            
+            # Tokenize
+            inputs = tokenizer(prompt, return_tensors="pt", max_length=1024, truncation=True)
+            
+            # Generate response
+            with torch.no_grad():
+                outputs = model.generate(
+                    input_ids=inputs.input_ids,
+                    attention_mask=inputs.attention_mask,
+                    max_new_tokens=self.settings.generation_config.get("max_tokens", 300),
+                    temperature=self.settings.generation_config.get("temperature", 0.7),
+                    top_p=self.settings.generation_config.get("top_p", 0.9),
                     do_sample=True,
-                    temperature=0.7,
-                    top_p=0.9,
-                    repetition_penalty=1.2
+                    repetition_penalty=1.1,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id
                 )
-                
-                # Extract the generated text
-                generated_text = outputs[0]['generated_text']
             
-            # Extract only the assistant's response (after the prompt)
-            if "Assistant:" in generated_text:
-                response = generated_text.split("Assistant:")[-1].strip()
-            elif "Human:" in generated_text and len(generated_text.split("Human:")) > 1:
-                # For DialoGPT format, get the last response
-                parts = generated_text.split("Human:")
-                if len(parts) > 1 and "Assistant:" in parts[-1]:
-                    response = parts[-1].split("Assistant:")[-1].strip()
-                else:
-                    response = generated_text[len(prompt):].strip()
-            else:
-                response = generated_text[len(prompt):].strip()
+            # Decode the response
+            full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            generated_response = full_response[len(prompt):].strip()
             
-            # Clean up any remaining special tokens or artifacts
-            response = response.replace("<USER>", "").replace("<ASSISTANT>", "").replace("<s>", "").replace("</s>", "").replace("<|endoftext|>", "").strip()
+            # Clean up the response
+            generated_response = self._clean_medical_response(generated_response)
             
-            # Format the response into a structured format with sections (for longer responses)
-            if len(response.split()) > 30 and "⸻" not in response:
-                # Try to structure the response if it's not already structured
-                response = self._format_medical_response(response, user_type)
+            # Add medical disclaimer
+            if self.settings.medical_config.get("auto_add_disclaimers", True):
+                disclaimer = self.settings.get_medical_disclaimer()
+                generated_response += f"\n\n⚠️ {disclaimer}"
             
-            # If the response is empty, provide a fallback
-            if not response:
-                response = "I apologize, but I couldn't generate a proper response. Please try rephrasing your question."
+            # Create proper MedicalSource objects for sources
+            sources = []
+            if include_sources:
+                from schemas import MedicalSource
+                sources = [
+                    MedicalSource(
+                        title="Medical Knowledge Base",
+                        url=None,
+                        type="knowledge_base",
+                        confidence=0.8,
+                        relevance_score=0.9
+                    )
+                ]
             
-            # Add safety disclaimer based on user type
-            if user_type == "patient":
-                response += "\n\nPlease note: This information is for educational purposes only. Always consult a healthcare professional for personalized medical advice."
-            elif user_type == "doctor":
-                response += "\n\nPlease use your clinical judgment and follow standard medical protocols when treating patients."
-            
-            return response
+            return {
+                "response": generated_response,
+                "confidence": 0.8,  # You could implement confidence scoring
+                "sources": sources,
+                "needs_professional_consultation": self._needs_professional_consultation(question)
+            }
             
         except Exception as e:
-            print(f"❌ Error generating AI response: {e}")
-            # Fallback to simulation mode
-            return await self._generate_simulation_response(question, context, user_type)
-    
-    def _format_medical_response(self, text: str, user_type: str) -> str:
-        """Format the response into a structured medical format with sections"""
-        
-        # Already structured, return as is
-        if "⸻" in text or "Main Symptoms" in text:
-            return text
-        
-        # Split into sentences
-        sentences = text.split(". ")
-        sentences = [s.strip() + "." for s in sentences if s.strip()]
-        
-        if len(sentences) < 3:
-            return text  # Too short to structure
-        
-        # Simplified formatting for short responses
-        formatted = sentences[0] + "\n\n⸻\n\n"
-        
-        # Different sections based on user type
-        if user_type == "patient":
-            formatted += "🔑 Key Information\n"
-            for sentence in sentences[1:5]:  # Take a few sentences for key info
-                formatted += f"\t• {sentence}\n"
+            print(f"❌ Error generating medical response: {e}")
+            traceback.print_exc()
             
-            if len(sentences) > 5:
-                formatted += "\n⸻\n\n"
-                formatted += "📌 Additional Details\n"
-                for sentence in sentences[5:10]:  # Take a few more for additional info
-                    formatted += f"\t• {sentence}\n"
-        else:
-            # More technical format for professionals
-            formatted += "Clinical Information\n"
-            for sentence in sentences[1:]:
-                formatted += f"• {sentence}\n"
-        
-        return formatted
+            return {
+                "response": "I apologize, but I'm having trouble processing your question right now. Please try rephrasing it or contact a healthcare professional directly.",
+                "confidence": 0.0,
+                "sources": [],
+                "needs_professional_consultation": True
+            }
     
-    def _needs_professional_consultation(self, question: str, user_type: str) -> bool:
-        """🩺 Determine if the question requires professional medical consultation"""
+    def _clean_medical_response(self, response: str) -> str:
+        """🧹 Clean and format the medical response"""
+        # Remove any training artifacts or unwanted tokens
+        response = response.replace("<|system|>", "")
+        response = response.replace("<|user|>", "")
+        response = response.replace("<|assistant|>", "")
+        response = response.replace("</response>", "")
+        response = response.replace("[END]", "")
         
-        # Keywords that suggest urgent medical attention
-        urgent_keywords = [
-            "emergency", "urgent", "severe", "chest pain", "difficulty breathing",
-            "unconscious", "bleeding", "overdose", "allergic reaction", "stroke",
-            "heart attack", "suicide", "self-harm"
-        ]
+        # Remove excessive newlines
+        while "\n\n\n" in response:
+            response = response.replace("\n\n\n", "\n\n")
+        
+        return response.strip()
+    
+    def _needs_professional_consultation(self, question: str) -> bool:
+        """🚨 Determine if question needs professional consultation"""
+        emergency_keywords = self.settings.medical_config.get("emergency_keywords", [])
         
         question_lower = question.lower()
         
-        # Always recommend consultation for urgent symptoms
-        if any(keyword in question_lower for keyword in urgent_keywords):
+        # Check for emergency keywords
+        if any(keyword in question_lower for keyword in emergency_keywords):
             return True
         
-        # For patients asking about specific symptoms or treatments
-        if user_type == "patient" and any(word in question_lower for word in ["should i", "treatment", "medication", "dose"]):
+        # Check for specific medical advice requests
+        advice_keywords = ["should i take", "what medication", "how much should i", "am i having"]
+        if any(keyword in question_lower for keyword in advice_keywords):
             return True
         
         return False
+    
+    async def detect_language(self, text: str) -> str:
+        """🌍 Detect language (simplified implementation)"""
+        # For now, just return 'en' - you could implement proper language detection
+        return "en"
+    
+    async def translate_to_english(self, text: str, source_language: str) -> str:
+        """🔄 Translate text to English"""
+        # For now, just return the original text
+        # You could implement BLOOM translation here
+        return text
+    
+    async def translate_from_english(self, text: str, target_language: str) -> str:
+        """🔄 Translate from English to target language"""
+        # For now, just return the original text
+        # You could implement BLOOM translation here
+        return text
+    
+    async def retrieve_medical_context(self, question: str, max_sources: int = 5) -> str:
+        """📚 Retrieve relevant medical context (RAG)"""
+        # For now, return empty context
+        # You could implement FAISS vector search here
+        return ""
     
     async def analyze_symptoms(
         self, 
@@ -618,109 +475,79 @@ class ModelManager:
         gender: Optional[str] = None,
         medical_history: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """🏥 Analyze symptoms and provide health assessment"""
+        """🔍 Analyze symptoms using medical model"""
         
-        # Simple symptom analysis (in production, use specialized medical reasoning)
-        possible_conditions = []
-        recommendations = []
-        risk_level = "low"
-        urgency = "routine"
+        # Create a symptom analysis prompt
+        symptom_text = ", ".join(symptoms)
+        context_info = []
         
-        # Check symptoms against known conditions
-        for condition, info in self.medical_knowledge.items():
-            if "symptoms" in info:
-                matching_symptoms = set(symptoms) & set(info["symptoms"])
-                if matching_symptoms:
-                    probability = len(matching_symptoms) / len(info["symptoms"])
-                    possible_conditions.append({
-                        "name": condition.replace("_", " ").title(),
-                        "probability": probability,
-                        "matching_symptoms": list(matching_symptoms),
-                        "description": info["definition"]
-                    })
+        if age:
+            context_info.append(f"Age: {age}")
+        if gender:
+            context_info.append(f"Gender: {gender}")
+        if medical_history:
+            context_info.append(f"Medical history: {', '.join(medical_history)}")
         
-        # Sort by probability
-        possible_conditions.sort(key=lambda x: x["probability"], reverse=True)
+        context = " | ".join(context_info) if context_info else ""
         
-        # Generate recommendations
-        if possible_conditions:
-            risk_level = "moderate" if possible_conditions[0]["probability"] > 0.5 else "low"
-            recommendations = [
-                "Monitor your symptoms",
-                "Stay hydrated and get adequate rest",
-                "Consider consulting a healthcare provider if symptoms persist or worsen"
-            ]
-        else:
-            recommendations = [
-                "Your symptoms don't match common conditions in our database",
-                "Consider keeping a symptom diary",
-                "Consult a healthcare provider for proper evaluation"
-            ]
+        question = f"A person is experiencing the following symptoms: {symptom_text}. {context}. What could be the possible causes and what should they do?"
         
-        # Check for urgent symptoms
-        urgent_symptoms = ["chest pain", "difficulty breathing", "severe headache", "loss of consciousness"]
-        if any(urgent in " ".join(symptoms).lower() for urgent in urgent_symptoms):
-            risk_level = "high"
-            urgency = "urgent"
-            recommendations = ["Seek immediate medical attention"] + recommendations
+        # Use the medical model to analyze
+        result = await self.generate_medical_response(
+            question=question,
+            user_type="patient",
+            include_sources=True
+        )
         
         return {
-            "risk_level": risk_level,
-            "possible_conditions": possible_conditions[:3],  # Top 3 matches
-            "recommendations": recommendations,
-            "urgency": urgency,
-            "confidence": 0.75  # Simplified confidence score
+            "analysis": result["response"],
+            "confidence": result["confidence"],
+            "recommendations": [
+                "Consult a healthcare professional for proper evaluation",
+                "Monitor symptoms and seek immediate care if they worsen"
+            ],
+            "urgency_level": "medium"  # You could implement urgency classification
         }
     
-    # System monitoring functions
     def are_models_loaded(self) -> bool:
-        """✅ Check if models are loaded and ready"""
-        return len(self.models) > 0 and all(
-            status == "loaded" for status in self.model_status.values()
-        )
+        """✅ Check if models are loaded"""
+        return len([status for status in self.model_status.values() if status == "loaded"]) > 0
     
     def get_available_models(self) -> List[str]:
         """📋 Get list of available models"""
-        return list(self.models.keys())
+        return [name for name, status in self.model_status.items() if status == "loaded"]
     
-    def get_model_details(self) -> Dict[str, Dict[str, Any]]:
-        """📊 Get detailed information about loaded models"""
-        details = {}
-        
-        for model_name, model in self.models.items():
-            details[model_name] = {
-                "status": self.model_status.get(model_name, "unknown"),
-                "type": "simulation" if model == "simulation" else "neural_network",
-                "memory_usage_mb": self.memory_usage.get(model_name, 0),
-                "capabilities": self._get_model_capabilities(model_name)
-            }
-        
-        return details
-    
-    def _get_model_capabilities(self, model_name: str) -> List[str]:
-        """🎯 Get capabilities for a specific model"""
-        capabilities = {
-            "medical_qa": ["medical_reasoning", "question_answering", "health_information"],
-            "translator": ["translation", "multilingual_support", "language_detection"],
-            "language_detector": ["language_identification", "text_analysis"],
-            "symptom_analyzer": ["symptom_analysis", "risk_assessment", "health_screening"]
+    def get_model_details(self) -> Dict[str, Any]:
+        """📊 Get detailed model information"""
+        return {
+            "models": self.model_status,
+            "last_loaded": {k: v.isoformat() for k, v in self.last_loaded.items()},
+            "total_models": len(self.model_status),
+            "loaded_models": len([s for s in self.model_status.values() if s == "loaded"])
         }
-        
-        return capabilities.get(model_name, [])
     
-    def get_memory_usage(self) -> Dict[str, float]:
-        """💾 Get current memory usage statistics"""
+    def get_model_status(self) -> Dict[str, str]:
+        """📈 Get current model status"""
+        return self.model_status.copy()
+    
+    def get_memory_usage(self) -> Dict[str, Any]:
+        """💾 Get memory usage information"""
         try:
+            import psutil
             process = psutil.Process()
             memory_info = process.memory_info()
             
             return {
-                "total_memory_mb": memory_info.rss / 1024 / 1024,
+                "memory_used_mb": memory_info.rss / 1024 / 1024,
                 "memory_percent": process.memory_percent(),
-                "available_memory_mb": psutil.virtual_memory().available / 1024 / 1024
+                "models_loaded": len(self.models)
             }
-        except Exception:
-            return {"error": "Could not retrieve memory usage"}
+        except ImportError:
+            return {
+                "memory_used_mb": "unknown",
+                "memory_percent": "unknown", 
+                "models_loaded": len(self.models)
+            }
     
     async def cleanup(self):
         """🧹 Clean up models and free memory"""
@@ -728,9 +555,10 @@ class ModelManager:
         
         for model_name in list(self.models.keys()):
             try:
-                if self.models[model_name] != "simulation":
-                    # Clear model from memory
+                if model_name in self.models:
                     del self.models[model_name]
+                if model_name in self.tokenizers:
+                    del self.tokenizers[model_name]
                     
                 self.model_status[model_name] = "unloaded"
                 print(f"✅ {model_name} cleaned up")
@@ -738,7 +566,7 @@ class ModelManager:
                 print(f"⚠️  Error cleaning up {model_name}: {e}")
         
         # Clear GPU cache if available
-        if TORCH_AVAILABLE and torch.cuda.is_available():
+        if torch.cuda.is_available():
             torch.cuda.empty_cache()
         
         print("✅ Cleanup complete!")

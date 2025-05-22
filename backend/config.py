@@ -61,6 +61,9 @@ class Settings:
             }
         }
         
+        # Add Mistral model path for the LLM
+        self.MISTRAL_MODEL_PATH = str(self.models_dir / "mistral")
+        
         # 🧠 AI Generation Settings
         self.generation_config = {
             "max_tokens": 500,

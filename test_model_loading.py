@@ -40,7 +40,17 @@ def test_model_loading():
         peft_config = PeftConfig.from_pretrained(str(lora_path))
         print(f"✅ Found config. Base model: {peft_config.base_model_name_or_path}")
         
-        # Load base model and tokenizer
+        # Load tokenizer from LoRA path (not base model) since it was modified during training
+        print("🔤 Loading tokenizer from LoRA adapter...")
+        tokenizer = AutoTokenizer.from_pretrained(str(lora_path))
+        
+        # Add pad token if not present
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            
+        print(f"🔤 LoRA tokenizer loaded with vocab size: {len(tokenizer)}")
+        
+        # Load base model and resize embeddings to match tokenizer
         print("🤖 Loading base model. This may take a moment...")
         start_time = time.time()
         
@@ -50,10 +60,16 @@ def test_model_loading():
             low_cpu_mem_usage=True        # Optimize memory usage
         )
         
-        print(f"⏱️ Base model loaded in {time.time() - start_time:.2f} seconds")
+        # CRITICAL: Resize model embeddings to match tokenizer vocab size
+        print(f"📏 Original model vocab size: {base_model.config.vocab_size}")
+        print(f"📏 Tokenizer vocab size: {len(tokenizer)}")
         
-        tokenizer = AutoTokenizer.from_pretrained(peft_config.base_model_name_or_path)
-        print("🔤 Tokenizer loaded")
+        if base_model.config.vocab_size != len(tokenizer):
+            print("🔧 Resizing model embeddings to match tokenizer...")
+            base_model.resize_token_embeddings(len(tokenizer))
+            print(f"✅ Model embeddings resized to: {base_model.config.vocab_size}")
+        
+        print(f"⏱️ Base model loaded in {time.time() - start_time:.2f} seconds")
         
         # Load the LoRA adapter
         print("🧠 Loading LoRA adapter...")
